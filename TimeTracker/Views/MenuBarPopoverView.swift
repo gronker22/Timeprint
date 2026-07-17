@@ -44,9 +44,12 @@ struct MenuBarPopoverView: View {
 
     private var headerView: some View {
         HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Timeprint")
-                    .font(.headline)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Timeprint")
+                        .font(.headline)
+                    focusChip
+                }
                 Text(Date(), style: .date)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -72,6 +75,28 @@ struct MenuBarPopoverView: View {
                 endPoint: .bottom
             )
         )
+    }
+
+    // Today's focus score at a glance (scattrd engine)
+    @ViewBuilder
+    private var focusChip: some View {
+        let todayStart = Calendar.current.startOfDay(for: Date())
+        let stats = FocusScore.analyze(watcher.fetchSessions(since: todayStart))
+        if stats.hasEnoughData {
+            Text("\(stats.score)")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(
+                    Capsule().fill(
+                        stats.score >= 60 ? Color.green
+                            : stats.score >= 30 ? Color.orange : Color.red
+                    )
+                )
+                .bubbleHover(scale: 1.1)
+                .help("Focus score — sustain \(Int(stats.sustainScore)), switching \(Int(stats.switchScore)), deep work \(Int(stats.deepWorkScore))")
+        }
     }
 
     // MARK: — Today / Week switch (sliding capsule)

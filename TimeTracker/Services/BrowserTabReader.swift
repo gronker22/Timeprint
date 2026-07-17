@@ -19,10 +19,10 @@ enum BrowserTabReader {
         end tell
         """)
 
-    // The exact page the user is looking at: the tab's title, falling back
-    // to the domain when the title is empty. Nil if Chrome has no windows
-    // or the user denied Automation access.
-    static func activeChromeTab() -> String? {
+    // The exact page the user is looking at: display label (tab title, falling
+    // back to the domain) plus the domain itself for categorization.
+    // Nil if Chrome has no windows or the user denied Automation access.
+    static func activeChromeTab() -> (label: String, host: String?)? {
         var error: NSDictionary?
         guard let descriptor = script?.executeAndReturnError(&error),
               descriptor.numberOfItems >= 2 else { return nil }
@@ -31,12 +31,16 @@ enum BrowserTabReader {
         let title = (descriptor.atIndex(2)?.stringValue ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
+        var host = URL(string: urlString)?.host
+        if let h = host, h.hasPrefix("www.") { host = String(h.dropFirst(4)) }
+
         if !title.isEmpty {
-            return title.count > maxTitleLength
+            let label = title.count > maxTitleLength
                 ? String(title.prefix(maxTitleLength - 1)) + "…"
                 : title
+            return (label, host)
         }
-        guard let host = URL(string: urlString)?.host else { return nil }
-        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        guard let host else { return nil }
+        return (host, host)
     }
 }

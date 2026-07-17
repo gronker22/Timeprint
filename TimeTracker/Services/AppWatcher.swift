@@ -8,6 +8,7 @@ import SwiftData
 struct AppSession {
     let appName: String
     let bundleIdentifier: String
+    var host: String? = nil
     let startTime: Date
 
     var duration: TimeInterval {
@@ -98,7 +99,7 @@ class AppWatcher: ObservableObject {
             let tab = BrowserTabReader.activeChromeTab()
         else { return }
 
-        let tabName = "\(tab) · Google Chrome"
+        let tabName = "\(tab.label) · Google Chrome"
         guard tabName != currentSession?.appName else { return }
 
         closeCurrentSession(at: Date())
@@ -106,6 +107,7 @@ class AppWatcher: ObservableObject {
         currentSession = AppSession(
             appName: tabName,
             bundleIdentifier: bundleID,
+            host: tab.host,
             startTime: Date()
         )
     }
@@ -148,6 +150,7 @@ class AppWatcher: ObservableObject {
         modelContext.insert(AppSessionModel(
             appName: session.appName,
             bundleIdentifier: session.bundleIdentifier,
+            host: session.host,
             startTime: session.startTime,
             endTime: endTime
         ))

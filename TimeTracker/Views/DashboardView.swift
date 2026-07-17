@@ -48,6 +48,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 statTiles(stats)
+                FocusCardsView()
                 card(
                     "Daily breakdown",
                     subtitle: averageHours > 0
