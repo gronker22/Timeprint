@@ -149,7 +149,9 @@ struct MenuBarPopoverView: View {
                 .padding(.vertical, 40)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    // Plain VStack on purpose: a LazyVStack loses its rows when
+                    // this view is removed/re-inserted by the tab transition
+                    VStack(spacing: 0) {
                         ForEach(watcher.todaySummary.prefix(12), id: \.app) { item in
                             AppRowView(
                                 appName: item.app,
@@ -166,6 +168,9 @@ struct MenuBarPopoverView: View {
                 .frame(maxHeight: 360)
             }
         }
+        // Coming back from the Week tab: re-pull from SwiftData immediately
+        // instead of waiting for the next 5s tick
+        .onAppear { watcher.refreshTodaySummary() }
     }
 
     // MARK: — Footer
