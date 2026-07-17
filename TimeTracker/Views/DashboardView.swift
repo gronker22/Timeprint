@@ -48,7 +48,13 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
                 statTiles(stats)
-                card("Daily breakdown", pops: false) { dailyChart }
+                card(
+                    "Daily breakdown",
+                    subtitle: averageHours > 0
+                        ? "dashed line marks your average: \(formatDuration(averageHours * 3600)) per active day"
+                        : nil,
+                    pops: false
+                ) { dailyChart }
                 HStack(alignment: .top, spacing: 16) {
                     card("Trends", subtitle: "vs. the previous \(rangeDays) days") {
                         trendsContent
@@ -286,15 +292,12 @@ struct DashboardView: View {
                         }
                     }
                 }
+                // Labeled in the card subtitle — an annotation here crowds
+                // the y-axis labels
                 if averageHours > 0 {
                     RuleMark(y: .value("Average", averageHours))
-                        .foregroundStyle(.secondary.opacity(0.55))
+                        .foregroundStyle(.secondary.opacity(0.45))
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                        .annotation(position: .topTrailing, spacing: 2) {
-                            Text("avg \(formatDuration(averageHours * 3600))")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
                 }
             }
             .chartYScale(domain: 0...max(1, (totals.map(\.hours).max() ?? 0) * 1.25))
