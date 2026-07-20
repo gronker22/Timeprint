@@ -1,17 +1,19 @@
 import Foundation
 
-// Reads the active tab out of Google Chrome via Apple Events.
-// First use triggers the macOS Automation permission prompt.
+// Reads the active tab out of Google Chrome or Safari via Apple Events.
+// First use per browser triggers the macOS Automation permission prompt.
 enum BrowserTabReader {
 
     static let chromeBundleID = "com.google.Chrome"
+    static let safariBundleID = "com.apple.Safari"
+    static let browserBundleIDs: Set<String> = [chromeBundleID, safariBundleID]
 
-    // Titles can be very long ("Some 90-word article headline - Medium");
-    // cap them so rows and charts stay readable
+    // Titles can be very long; cap them so rows and charts stay readable
     private static let maxTitleLength = 60
 
-    // Compiled once — NSAppleScript compilation is the expensive part
-    private static let script = NSAppleScript(source: """
+    // Compiled once — NSAppleScript compilation is the expensive part.
+    // Chrome calls a tab's title "title"; Safari calls it "name".
+    private static let chromeScript = NSAppleScript(source: """
         tell application "Google Chrome"
             if (count of windows) > 0 then
                 return {URL, title} of active tab of front window
@@ -19,10 +21,25 @@ enum BrowserTabReader {
         end tell
         """)
 
+    private static let safariScript = NSAppleScript(source: """
+        tell application "Safari"
+            if (count of windows) > 0 then
+                return {URL of current tab of front window, name of current tab of front window}
+            end if
+        end tell
+        """)
+
     // The exact page the user is looking at: display label (tab title, falling
     // back to the domain) plus the domain itself for categorization.
-    // Nil if Chrome has no windows or the user denied Automation access.
-    static func activeChromeTab() -> (label: String, host: String?)? {
+    // Nil for non-browsers, no open windows, or denied Automation access.
+    static func activeTab(bundleID: String) -> (label: String, host: String?)? {
+        let script: NSAppleScript?
+        switch bundleID {
+        case chromeBundleID: script = chromeScript
+        case safariBundleID: script = safariScript
+        default: return nil
+        }
+
         var error: NSDictionary?
         guard let descriptor = script?.executeAndReturnError(&error),
               descriptor.numberOfItems >= 2 else { return nil }
