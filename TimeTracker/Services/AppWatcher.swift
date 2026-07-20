@@ -38,8 +38,16 @@ class AppWatcher: ObservableObject {
         return TimeInterval((minutes > 0 ? minutes : 2) * 60)
     }
 
+    // Never tracked regardless of user settings: the lock screen isn't app
+    // usage, and the tracker shouldn't track itself
+    private static let hardExcludedBundleIDs: Set<String> = [
+        "com.apple.loginwindow",
+        Bundle.main.bundleIdentifier ?? "",
+    ]
+
     var excludedBundleIDs: Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: "excludedBundleIDs") ?? ["com.apple.finder"])
+            .union(Self.hardExcludedBundleIDs)
     }
 
     init(modelContext: ModelContext) {

@@ -41,8 +41,13 @@ enum BrowserTabReader {
         }
 
         var error: NSDictionary?
-        guard let descriptor = script?.executeAndReturnError(&error),
-              descriptor.numberOfItems >= 2 else { return nil }
+        let result = script?.executeAndReturnError(&error)
+        if let error {
+            // Most commonly -1743: Automation permission denied — visible in
+            // Console.app when a browser stubbornly won't split into tabs
+            NSLog("Focusprint: tab read failed for \(bundleID) — \(error)")
+        }
+        guard let descriptor = result, descriptor.numberOfItems >= 2 else { return nil }
 
         let urlString = descriptor.atIndex(1)?.stringValue ?? ""
         let title = (descriptor.atIndex(2)?.stringValue ?? "")
