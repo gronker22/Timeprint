@@ -2,6 +2,10 @@ import Foundation
 
 // Reads the active tab out of Google Chrome or Safari via Apple Events.
 // First use per browser triggers the macOS Automation permission prompt.
+//
+// IMPORTANT: Apple Events are synchronous IPC and can block for a long time.
+// Everything here must be called off the main thread, from one serial queue
+// (NSAppleScript instances are not safe to share across threads).
 enum BrowserTabReader {
 
     static let chromeBundleID = "com.google.Chrome"
@@ -10,6 +14,12 @@ enum BrowserTabReader {
 
     // Titles can be very long; cap them so rows and charts stay readable
     private static let maxTitleLength = 60
+
+    enum Result {
+        case tab(label: String, host: String?)
+        case unavailable        // no windows, blank tab — normal, keep polling
+        case permissionDenied   // Automation refused — back off hard
+    }
 
     // Compiled once — NSAppleScript compilation is the expensive part.
     // Chrome calls a tab's title "title"; Safari calls it "name".
@@ -29,25 +39,28 @@ enum BrowserTabReader {
         end tell
         """)
 
-    // The exact page the user is looking at: display label (tab title, falling
-    // back to the domain) plus the domain itself for categorization.
-    // Nil for non-browsers, no open windows, or denied Automation access.
-    static func activeTab(bundleID: String) -> (label: String, host: String?)? {
+    static func activeTab(bundleID: String) -> Result {
         let script: NSAppleScript?
         switch bundleID {
         case chromeBundleID: script = chromeScript
         case safariBundleID: script = safariScript
-        default: return nil
+        default: return .unavailable
         }
 
         var error: NSDictionary?
-        let result = script?.executeAndReturnError(&error)
+        let descriptor = script?.executeAndReturnError(&error)
+
         if let error {
-            // Most commonly -1743: Automation permission denied — visible in
-            // Console.app when a browser stubbornly won't split into tabs
-            NSLog("Focusprint: tab read failed for \(bundleID) — \(error)")
+            let code = (error[NSAppleScript.errorNumber] as? Int) ?? 0
+            // -1743 errAEEventNotPermitted, -1744 needs user consent,
+            // -600 the app isn't running yet
+            if code == -1743 || code == -1744 {
+                return .permissionDenied
+            }
+            return .unavailable
         }
-        guard let descriptor = result, descriptor.numberOfItems >= 2 else { return nil }
+
+        guard let descriptor, descriptor.numberOfItems >= 2 else { return .unavailable }
 
         let urlString = descriptor.atIndex(1)?.stringValue ?? ""
         let title = (descriptor.atIndex(2)?.stringValue ?? "")
@@ -60,9 +73,9 @@ enum BrowserTabReader {
             let label = title.count > maxTitleLength
                 ? String(title.prefix(maxTitleLength - 1)) + "…"
                 : title
-            return (label, host)
+            return .tab(label: label, host: host)
         }
-        guard let host else { return nil }
-        return (host, host)
+        guard let host else { return .unavailable }
+        return .tab(label: host, host: host)
     }
 }

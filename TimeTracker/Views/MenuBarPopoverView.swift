@@ -77,11 +77,11 @@ struct MenuBarPopoverView: View {
         )
     }
 
-    // Today's focus score at a glance (scattrd engine)
+    // Today's focus score at a glance — reads the watcher's cached analysis
+    // rather than recomputing on every render
     @ViewBuilder
     private var focusChip: some View {
-        let todayStart = Calendar.current.startOfDay(for: Date())
-        let stats = FocusScore.analyze(watcher.fetchSessions(since: todayStart))
+        let stats = watcher.todayFocus
         if stats.hasEnoughData {
             Text("\(stats.score)")
                 .font(.caption.monospacedDigit().weight(.semibold))

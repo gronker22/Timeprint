@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import SwiftData
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
@@ -74,9 +74,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func startMenuBarLabelUpdates() {
         updateMenuBarLabel()
 
-        labelTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            DispatchQueue.main.async { self?.updateMenuBarLabel() }
+        let timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            self?.updateMenuBarLabel()
         }
+        timer.tolerance = 20
+        labelTimer = timer
 
         // React immediately when the Settings toggle flips
         NotificationCenter.default.addObserver(
@@ -93,11 +95,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let defaults = UserDefaults.standard
         let title = NSMutableAttributedString()
 
-        // Focus score first, colored, so it's readable without opening anything
+        // Focus score first, colored, so it's readable without opening anything.
+        // Uses the watcher's cached analysis — no fetch, no scoring work here.
         let showScore = defaults.object(forKey: "showMenuBarScore") as? Bool ?? true
         if showScore {
-            let todayStart = Calendar.current.startOfDay(for: Date())
-            let stats = FocusScore.analyze(watcher.fetchSessions(since: todayStart))
+            let stats = watcher.todayFocus
             if stats.hasEnoughData {
                 let color: NSColor = stats.score >= 60 ? .systemGreen
                     : stats.score >= 30 ? .systemOrange : .systemRed
@@ -131,11 +133,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         popover.contentSize = NSSize(width: 340, height: 480)
         popover.behavior = .transient  // closes when you click elsewhere
         popover.animates = true
+        popover.delegate = self
 
         let rootView = MenuBarPopoverView()
             .environmentObject(watcher)
 
         popover.contentViewController = NSHostingController(rootView: rootView)
+    }
+
+    // MARK: — NSPopoverDelegate (drives the watcher's polling cadence)
+
+    func popoverDidShow(_ notification: Notification) {
+        watcher.setPopoverVisible(true)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        watcher.setPopoverVisible(false)
+        updateMenuBarLabel()
     }
 
     @objc private func togglePopover(_ sender: AnyObject?) {

@@ -23,6 +23,9 @@ class AppWatcher: ObservableObject {
     @Published var isTracking: Bool = true
     @Published var isIdle: Bool = false
     @Published private(set) var todaySummary: [(app: String, duration: TimeInterval)] = []
+    // Cached so the popover chip and menu bar label never recompute the score
+    // themselves — analyzing a full day on every render was pure waste
+    @Published private(set) var todayFocus: FocusDayStats = .empty
 
     // Internal (not private) so the reports extension can fetch too
     let modelContext: ModelContext
@@ -31,6 +34,19 @@ class AppWatcher: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     private var tickTimer: Timer?
     private var idleTimer: Timer?
+
+    // Apple Events block the calling thread, so tab reads run off-main on one
+    // serial queue (NSAppleScript can't be shared across threads)
+    private let tabQueue = DispatchQueue(label: "com.markos.timetracker.tabreader", qos: .utility)
+    private var isReadingTab = false
+    private var tabBackoffUntil: Date?
+    private var loggedPermissionDenial = false
+
+    // Nobody's looking at the popover most of the time — poll slowly until it
+    // opens. This is the single biggest energy win.
+    private var isPopoverVisible = false
+    private var visibleTickInterval: TimeInterval = 5
+    private var hiddenTickInterval: TimeInterval = 60
 
     // Read live from defaults so Settings changes apply without a restart
     var idleThreshold: TimeInterval {
@@ -85,46 +101,110 @@ class AppWatcher: ObservableObject {
 
     // MARK: — Timers
 
+    // Called by AppDelegate when the popover opens/closes so the tick slows
+    // right down while nothing is on screen — the biggest energy win here
+    func setPopoverVisible(_ visible: Bool) {
+        guard visible != isPopoverVisible else { return }
+        isPopoverVisible = visible
+        startTick()
+        if visible {
+            refreshBrowserTab()
+            refreshTodaySummary()
+        }
+    }
+
     private func startTick() {
-        tickTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        tickTimer?.invalidate()
+        let interval: TimeInterval = isPopoverVisible ? 5 : 60
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self, self.isTracking else { return }
             self.refreshBrowserTab()
             self.refreshTodaySummary()
         }
+        // Generous tolerance lets macOS coalesce our wakeups with other timers
+        // rather than waking the CPU on our own schedule
+        timer.tolerance = interval * 0.5
+        tickTimer = timer
     }
 
     // MARK: — Browser tab tracking
 
     // When a supported browser is frontmost, split sessions per tab title
-    // instead of lumping everything under the browser
+    // instead of lumping everything under the browser.
+    // The Apple Event runs off-main because it's synchronous IPC that can
+    // block for seconds if the browser is busy.
     private func refreshBrowserTab() {
         guard
             !isIdle,
+            isTracking,
+            !isReadingTab,
             let frontmost = NSWorkspace.shared.frontmostApplication,
             let bundleID = frontmost.bundleIdentifier,
             BrowserTabReader.browserBundleIDs.contains(bundleID),
-            !excludedBundleIDs.contains(bundleID),
-            let tab = BrowserTabReader.activeTab(bundleID: bundleID)
+            !excludedBundleIDs.contains(bundleID)
         else { return }
 
-        let browserName = frontmost.localizedName ?? "Browser"
-        let tabName = "\(tab.label) · \(browserName)"
-        guard tabName != currentSession?.appName else { return }
+        // Automation denied? Stop hammering it every tick
+        if let backoff = tabBackoffUntil, Date() < backoff { return }
 
-        closeCurrentSession(at: Date())
-        currentAppName = tabName
-        currentSession = AppSession(
-            appName: tabName,
-            bundleIdentifier: bundleID,
-            host: tab.host,
-            startTime: Date()
-        )
+        let browserName = frontmost.localizedName ?? "Browser"
+        isReadingTab = true
+        tabQueue.async { [weak self] in
+            let result = BrowserTabReader.activeTab(bundleID: bundleID)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.isReadingTab = false
+                self.applyTabResult(result, bundleID: bundleID, browserName: browserName)
+            }
+        }
+    }
+
+    private func applyTabResult(
+        _ result: BrowserTabReader.Result,
+        bundleID: String,
+        browserName: String
+    ) {
+        switch result {
+        case .permissionDenied:
+            // Retry occasionally in case the user grants access later, but
+            // log only once — a message per tick was its own energy drain
+            tabBackoffUntil = Date().addingTimeInterval(300)
+            if !loggedPermissionDenial {
+                loggedPermissionDenial = true
+                NSLog("Focusprint: Automation permission denied for \(bundleID); "
+                      + "tab tracking paused. Grant it in System Settings › Privacy & Security › Automation.")
+            }
+
+        case .unavailable:
+            break
+
+        case let .tab(label, host):
+            tabBackoffUntil = nil
+            loggedPermissionDenial = false
+
+            // Still frontmost? The async hop means it might not be
+            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID else { return }
+
+            let tabName = "\(label) · \(browserName)"
+            guard tabName != currentSession?.appName else { return }
+
+            closeCurrentSession(at: Date())
+            currentAppName = tabName
+            currentSession = AppSession(
+                appName: tabName,
+                bundleIdentifier: bundleID,
+                host: host,
+                startTime: Date()
+            )
+        }
     }
 
     private func startIdleCheck() {
-        idleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             self?.checkIdle()
         }
+        timer.tolerance = 10
+        idleTimer = timer
     }
 
     // MARK: — Core logic
@@ -144,9 +224,11 @@ class AppWatcher: ObservableObject {
                 startTime: Date()
             )
         }
-        // If we just switched into Chrome, refine to the active tab right away
+        // If we just switched into a browser, refine to the active tab now
         refreshBrowserTab()
-        refreshTodaySummary()
+        // Recomputing totals on every alt-tab is wasted work when the popover
+        // isn't open; the tick and the menu bar timer keep it current enough
+        if isPopoverVisible { refreshTodaySummary() }
     }
 
     private func closeCurrentSession(at endTime: Date) {
@@ -221,9 +303,10 @@ class AppWatcher: ObservableObject {
 
     func refreshTodaySummary() {
         let todayStart = Calendar.current.startOfDay(for: Date())
+        let todaySessions = fetchSessions(since: todayStart)
 
         var totals: [String: TimeInterval] = [:]
-        for session in fetchSessions(since: todayStart) {
+        for session in todaySessions {
             totals[session.appName, default: 0] += session.duration
         }
         if let live = currentSession, isTracking, !isIdle {
@@ -233,6 +316,9 @@ class AppWatcher: ObservableObject {
         todaySummary = totals
             .map { (app: $0.key, duration: $0.value) }
             .sorted { $0.duration > $1.duration }
+
+        // One analysis per tick, shared by the popover chip and menu bar label
+        todayFocus = FocusScore.analyze(todaySessions)
     }
 
     func fetchSessions(since date: Date) -> [AppSessionModel] {
